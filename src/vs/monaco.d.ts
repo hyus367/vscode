@@ -7415,6 +7415,7 @@ declare namespace monaco.languages {
 		 * @deprecated Use `handleEndOfLifetime` instead.
 		*/
 		handleRejection?(completions: T, item: T['items'][number]): void;
+		handlePhase?(completions: T, item: T['items'][number], phase: InlineCompletionPhase): void;
 		/**
 		 * Is called when an inline completion item is no longer being used.
 		 * Provides a reason of why it is not used anymore.
@@ -7439,6 +7440,10 @@ declare namespace monaco.languages {
 		debounceDelayMs?: number;
 		toString?(): string;
 	}
+
+	export type InlineCompletionPhase = {
+		type: '';
+	};
 
 	export enum InlineCompletionEndOfLifeReasonKind {
 		Accepted = 0,

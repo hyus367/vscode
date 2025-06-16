@@ -890,6 +890,8 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 	*/
 	handleRejection?(completions: T, item: T['items'][number]): void;
 
+	handlePhase?(completions: T, item: T['items'][number], phase: InlineCompletionPhase): void;
+
 	/**
 	 * Is called when an inline completion item is no longer being used.
 	 * Provides a reason of why it is not used anymore.
@@ -921,6 +923,10 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 
 	toString?(): string;
 }
+
+export type InlineCompletionPhase = {
+	type: '';
+};
 
 export enum InlineCompletionEndOfLifeReasonKind {
 	Accepted = 0,

@@ -54,11 +54,15 @@ export async function provideInlineCompletions(
 			+ ` Path: ${foundCycles.map(s => s.toString ? s.toString() : ('' + s)).join(' -> ')}`));
 	}
 
-	const queryProviderOrPreferredProvider = new CachedFunction(async (provider: InlineCompletionsProvider<InlineCompletions>): Promise<InlineSuggestionList | undefined> => {
+	const queryProvider = new CachedFunction(async (provider: InlineCompletionsProvider<InlineCompletions>): Promise<InlineSuggestionList | undefined> => {
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
+
 		const yieldsTo = yieldsToGraph.getOutgoing(provider);
 		for (const p of yieldsTo) {
 			// We know there is no cycle, so no recursion here
-			const result = await queryProviderOrPreferredProvider.get(p);
+			const result = await queryProvider.get(p);
 			if (result && result.inlineSuggestions.items.length > 0) {
 				// Skip provider
 				return undefined;
@@ -90,7 +94,7 @@ export async function provideInlineCompletions(
 		return list;
 	});
 
-	const inlineCompletionLists = AsyncIterableObject.fromPromisesResolveOrder(providers.map(p => queryProviderOrPreferredProvider.get(p)));
+	const inlineCompletionLists = AsyncIterableObject.fromPromisesResolveOrder(providers.map(p => queryProvider.get(p)));
 
 	if (token.isCancellationRequested) {
 		tokenSource.dispose(true);
@@ -98,7 +102,43 @@ export async function provideInlineCompletions(
 		return new InlineCompletionProviderResult([], new Set(), []);
 	}
 
-	const result = await addRefAndCreateResult(contextWithUuid, inlineCompletionLists, model);
+	// for deduplication
+	const itemsByHash = new Map<string, InlineSuggestData>();
+
+	let shouldStop = false;
+	const lists: InlineSuggestionList[] = [];
+	for await (const completions of inlineCompletionLists) {
+		if (!completions) {
+			continue;
+		}
+		completions.addRef();
+		lists.push(completions);
+		for (const item of completions.inlineSuggestionsData) {
+			if (!contextWithUuid.includeInlineEdits && (item.isInlineEdit || item.showInlineEditMenu)) {
+				continue;
+			}
+			if (!contextWithUuid.includeInlineCompletions && !(item.isInlineEdit || item.showInlineEditMenu)) {
+				continue;
+			}
+
+			itemsByHash.set(createHashFromSingleTextEdit(item.getSingleTextEdit()), item);
+
+			// Stop after first visible inline completion
+			if (!(item.isInlineEdit || item.showInlineEditMenu) && contextWithUuid.triggerKind === InlineCompletionTriggerKind.Automatic) {
+				const minifiedEdit = item.getSingleTextEdit().removeCommonPrefix(new TextModelText(model));
+				if (!minifiedEdit.isEmpty) {
+					shouldStop = true;
+				}
+			}
+		}
+
+		if (shouldStop) {
+			break;
+		}
+	}
+
+	const result = new InlineCompletionProviderResult(Array.from(itemsByHash.values()), new Set(itemsByHash.keys()), lists);
+
 	tokenSource.dispose(true); // This disposes results that are not referenced by now.
 	return result;
 }
@@ -115,47 +155,6 @@ function runWhenCancelled(token: CancellationToken, callback: () => void): IDisp
 		});
 		return { dispose: () => listener.dispose() };
 	}
-}
-
-async function addRefAndCreateResult(
-	context: InlineCompletionContext,
-	inlineCompletionLists: AsyncIterable<(InlineSuggestionList | undefined)>,
-	model: ITextModel,
-): Promise<InlineCompletionProviderResult> {
-	// for deduplication
-	const itemsByHash = new Map<string, InlineSuggestData>();
-
-	let shouldStop = false;
-	const lists: InlineSuggestionList[] = [];
-	for await (const completions of inlineCompletionLists) {
-		if (!completions) { continue; }
-		completions.addRef();
-		lists.push(completions);
-		for (const item of completions.inlineSuggestionsData) {
-			if (!context.includeInlineEdits && (item.isInlineEdit || item.showInlineEditMenu)) {
-				continue;
-			}
-			if (!context.includeInlineCompletions && !(item.isInlineEdit || item.showInlineEditMenu)) {
-				continue;
-			}
-
-			itemsByHash.set(createHashFromSingleTextEdit(item.getSingleTextEdit()), item);
-
-			// Stop after first visible inline completion
-			if (!(item.isInlineEdit || item.showInlineEditMenu) && context.triggerKind === InlineCompletionTriggerKind.Automatic) {
-				const minifiedEdit = item.getSingleTextEdit().removeCommonPrefix(new TextModelText(model));
-				if (!minifiedEdit.isEmpty) {
-					shouldStop = true;
-				}
-			}
-		}
-
-		if (shouldStop) {
-			break;
-		}
-	}
-
-	return new InlineCompletionProviderResult(Array.from(itemsByHash.values()), new Set(itemsByHash.keys()), lists);
 }
 
 export class InlineCompletionProviderResult implements IDisposable {
